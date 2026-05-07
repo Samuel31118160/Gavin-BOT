@@ -1,4 +1,5 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, EmbedBuilder, AttachmentBuilder } = require("discord.js");
+const { ChartJSNodeCanvas } = require("chartjs-node-canvas");
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const DISCORD_TOKEN  = process.env.DISCORD_TOKEN;
@@ -41,11 +42,119 @@ async function fetchDR() {
   };
 }
 
-async function fetchHistory() {
-  const res = await fetch(`https://puddle.farm/api/player/${PLAYER_ID}/${CHAR_SHORT}/history?count=10`);
+async function fetchHistory(count = 10) {
+  const res = await fetch(`https://puddle.farm/api/player/${PLAYER_ID}/${CHAR_SHORT}/history?count=${count}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   return data.history || [];
+}
+
+// ─── GRAPH ─────────────────────────────────────────────────────────────────
+
+async function generateDRGraph(history) {
+  // history comes in newest-first; reverse so oldest is on the left
+  const ordered = [...history].reverse();
+
+  const labels = ordered.map((_, i) => `G${i + 1}`);
+  const drValues = ordered.map(m => Math.round(m.own_rating_value) % 10000);
+  const wins = ordered.map(m => m.result_win);
+
+  const minDR = Math.min(...drValues);
+  const maxDR = Math.max(...drValues);
+  const padding = Math.max(20, Math.round((maxDR - minDR) * 0.25));
+  const yMin = minDR - padding;
+  const yMax = maxDR + padding;
+
+  // Point colors: green for win, red for loss
+  const pointColors = wins.map(w => w ? "rgba(87, 242, 135, 0.9)" : "rgba(237, 66, 69, 0.9)");
+  const pointBorderColors = wins.map(w => w ? "rgba(87, 242, 135, 1)" : "rgba(237, 66, 69, 1)");
+
+  const width = 900;
+  const height = 450;
+
+  const chartCanvas = new ChartJSNodeCanvas({
+    width,
+    height,
+    backgroundColour: "#1e1f22",
+  });
+
+  const configuration = {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "DR",
+          data: drValues,
+          borderColor: "rgba(88, 101, 242, 1)",
+          borderWidth: 2.5,
+          backgroundColor: (ctx) => {
+            const chart = ctx.chart;
+            const { ctx: c, chartArea } = chart;
+            if (!chartArea) return "transparent";
+            const gradient = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+            gradient.addColorStop(0, "rgba(88, 101, 242, 0.35)");
+            gradient.addColorStop(1, "rgba(88, 101, 242, 0.01)");
+            return gradient;
+          },
+          fill: true,
+          tension: 0.35,
+          pointRadius: 5,
+          pointHoverRadius: 7,
+          pointBackgroundColor: pointColors,
+          pointBorderColor: pointBorderColors,
+          pointBorderWidth: 1.5,
+        },
+      ],
+    },
+    options: {
+      responsive: false,
+      animation: false,
+      layout: {
+        padding: { top: 20, right: 30, bottom: 10, left: 10 },
+      },
+      plugins: {
+        legend: { display: false },
+        title: {
+          display: true,
+          text: `DR History — Last ${history.length} Games (Johnny)`,
+          color: "#ffffff",
+          font: { size: 18, weight: "bold", family: "sans-serif" },
+          padding: { bottom: 16 },
+        },
+        tooltip: { enabled: false },
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: "#8b8fa8",
+            font: { size: 11 },
+            maxTicksLimit: 20,
+            maxRotation: 0,
+          },
+          grid: {
+            color: "rgba(255,255,255,0.06)",
+          },
+          border: { color: "rgba(255,255,255,0.1)" },
+        },
+        y: {
+          min: yMin,
+          max: yMax,
+          ticks: {
+            color: "#8b8fa8",
+            font: { size: 12 },
+            callback: (val) => val.toLocaleString(),
+          },
+          grid: {
+            color: "rgba(255,255,255,0.06)",
+          },
+          border: { color: "rgba(255,255,255,0.1)" },
+        },
+      },
+    },
+  };
+
+  return chartCanvas.renderToBuffer(configuration);
 }
 
 // ─── EMBEDS ────────────────────────────────────────────────────────────────
@@ -198,13 +307,51 @@ client.on("messageCreate", async (message) => {
       await message.reply("❌ Could not fetch history right now, try again later.");
     }
   }
+
+  else if (command === "graph") {
+    try {
+      // Send a "loading" reply first since chart generation takes a moment
+      const loadingMsg = await message.reply("📊 Generating graph...");
+
+      const history = await fetchHistory(100);
+      if (history.length === 0) {
+        await loadingMsg.edit("❌ No match history found.");
+        return;
+      }
+
+      const imageBuffer = await generateDRGraph(history);
+      const attachment  = new AttachmentBuilder(imageBuffer, { name: "dr_graph.png" });
+
+      const wins   = history.filter(m => m.result_win).length;
+      const losses = history.length - wins;
+      const winrate = ((wins / history.length) * 100).toFixed(1);
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle(`📈 DR Graph — Last ${history.length} Games (Johnny)`)
+        .setURL(`https://puddle.farm/player/${PLAYER_ID}/${CHAR_SHORT}`)
+        .setImage("attachment://dr_graph.png")
+        .addFields(
+          { name: "Wins",    value: `${wins}`,      inline: true },
+          { name: "Losses",  value: `${losses}`,    inline: true },
+          { name: "Win Rate",value: `${winrate}%`,  inline: true },
+        )
+        .setFooter({ text: "🟢 Win  🔴 Loss  •  puddle.farm • Guilty Gear Strive" })
+        .setTimestamp();
+
+      await loadingMsg.edit({ content: null, embeds: [embed], files: [attachment] });
+    } catch (err) {
+      console.error("[graph error]", err);
+      await message.reply("❌ Could not generate graph right now, try again later.");
+    }
+  }
 });
 
 // ─── STARTUP ───────────────────────────────────────────────────────────────
 
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
-  console.log(`Commands: !dr, !stats, !history`);
+  console.log(`Commands: !dr, !stats, !history, !graph`);
   poll();
   setInterval(poll, POLL_INTERVAL);
 });
