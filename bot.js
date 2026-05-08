@@ -1,5 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, AttachmentBuilder } = require("discord.js");
-const { ChartJSNodeCanvas } = require("chartjs-node-canvas");
+const { Client, GatewayIntentBits, EmbedBuilder } = require("discord.js");
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const DISCORD_TOKEN  = process.env.DISCORD_TOKEN;
@@ -20,150 +19,33 @@ const client = new Client({
   ]
 });
 
-const chart = new ChartJSNodeCanvas({ width: 800, height: 400, backgroundColour: "#2b2d31" });
-const chartSquare = new ChartJSNodeCanvas({ width: 500, height: 500, backgroundColour: "#2b2d31" });
-
 let lastDR         = null;
 let lastDeviation  = null;
 let lastMatchCount = null;
-
-function fmt(n) { return Math.round(n) % 10000; }
 
 async function fetchDR() {
   const res = await fetch(API_URL);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
+
   const charData = data.ratings?.find(r => r.char_short === CHAR_SHORT);
-  if (!charData) throw new Error(`Character ${CHAR_SHORT} not found`);
+  if (!charData) throw new Error(`Character ${CHAR_SHORT} not found for player`);
+
   return {
     playerName: data.name,
-    rating:     fmt(charData.rating),
+    rating:     Math.round(charData.rating) % 10000,
     deviation:  Math.round(charData.deviation),
     matchCount: charData.match_count,
     topChar:    charData.top_char,
-    topRating:  charData.top_rating ? fmt(charData.top_rating.value) : null,
+    topRating:  charData.top_rating ? Math.round(charData.top_rating.value) % 10000 : null,
   };
 }
 
-async function fetchHistory(count = 100) {
-  const res = await fetch(`https://puddle.farm/api/player/${PLAYER_ID}/${CHAR_SHORT}/history?count=${count}`);
+async function fetchHistory() {
+  const res = await fetch(`https://puddle.farm/api/player/${PLAYER_ID}/${CHAR_SHORT}/history?count=10`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   return data.history || [];
-}
-
-// ─── CHARTS ────────────────────────────────────────────────────────────────
-
-async function generateDRChart(history) {
-  const reversed = [...history].reverse();
-  const labels   = reversed.map((_, i) => `#${i + 1}`);
-  const data     = reversed.map(m => fmt(m.own_rating_value));
-
-  return chart.renderToBuffer({
-    type: "line",
-    data: {
-      labels,
-      datasets: [{
-        label: "DR",
-        data,
-        borderColor: "#5865f2",
-        backgroundColor: "rgba(88,101,242,0.15)",
-        pointBackgroundColor: reversed.map(m => m.result_win ? "#57f287" : "#ed4245"),
-        pointRadius: 5,
-        tension: 0.3,
-        fill: true,
-      }]
-    },
-    options: {
-      plugins: {
-        legend: { labels: { color: "#fff" } },
-        title: { display: true, text: "DR Over Recent Matches (green=win, red=loss)", color: "#fff", font: { size: 15 } }
-      },
-      scales: {
-        x: { ticks: { color: "#aaa", maxTicksLimit: 20 }, grid: { color: "#444" } },
-        y: { ticks: { color: "#aaa" }, grid: { color: "#444" } }
-      }
-    }
-  });
-}
-
-async function generateWinLossChart(history) {
-  const wins   = history.filter(m => m.result_win).length;
-  const losses = history.filter(m => !m.result_win).length;
-  const pct    = Math.round((wins / history.length) * 100);
-
-  return chart.renderToBuffer({
-    type: "bar",
-    data: {
-      labels: ["Wins", "Losses"],
-      datasets: [{
-        label: "Games",
-        data: [wins, losses],
-        backgroundColor: ["#57f287", "#ed4245"],
-        borderRadius: 8,
-      }]
-    },
-    options: {
-      plugins: {
-        legend: { display: false },
-        title: { display: true, text: `Win/Loss — Last ${history.length} Matches (${pct}% winrate)`, color: "#fff", font: { size: 15 } }
-      },
-      scales: {
-        x: { ticks: { color: "#fff" }, grid: { color: "#444" } },
-        y: { ticks: { color: "#aaa" }, grid: { color: "#444" }, beginAtZero: true }
-      }
-    }
-  });
-}
-
-async function generateMatchupChart(history) {
-  // Build per-character stats
-  const stats = {};
-  for (const m of history) {
-    const char = m.opponent_character || "Unknown";
-    if (!stats[char]) stats[char] = { wins: 0, total: 0 };
-    stats[char].total++;
-    if (m.result_win) stats[char].wins++;
-  }
-
-  // Sort by most played, take top 10
-  const sorted = Object.entries(stats)
-    .sort((a, b) => b[1].total - a[1].total)
-    .slice(0, 10);
-
-  const labels   = sorted.map(([char, s]) => `${char} (${s.total})`);
-  const winRates = sorted.map(([, s]) => Math.round((s.wins / s.total) * 100));
-
-  // Color each bar: green if >50%, red if <50%, yellow if 50%
-  const colors = winRates.map(r => r > 50 ? "#57f287" : r < 50 ? "#ed4245" : "#fee75c");
-
-  return chartSquare.renderToBuffer({
-    type: "bar",
-    data: {
-      labels,
-      datasets: [{
-        label: "Win Rate %",
-        data: winRates,
-        backgroundColor: colors,
-        borderRadius: 6,
-      }]
-    },
-    options: {
-      indexAxis: "y",
-      plugins: {
-        legend: { display: false },
-        title: { display: true, text: "Win Rate by Character (top 10 most played)", color: "#fff", font: { size: 14 } }
-      },
-      scales: {
-        x: {
-          ticks: { color: "#aaa", callback: v => `${v}%` },
-          grid: { color: "#444" },
-          min: 0, max: 100
-        },
-        y: { ticks: { color: "#fff" }, grid: { color: "#444" } }
-      }
-    }
-  });
 }
 
 // ─── EMBEDS ────────────────────────────────────────────────────────────────
@@ -174,6 +56,7 @@ function drUpdateEmbed(playerName, current, previous) {
   const arrow       = diff > 0 ? "📈" : diff < 0 ? "📉" : "➡️";
   const color       = diff > 0 ? 0x57f287 : diff < 0 ? 0xed4245 : 0x5865f2;
   const gamesPlayed = current.matchCount - previous.matchCount;
+
   return new EmbedBuilder()
     .setColor(color)
     .setTitle(`${arrow} DR Update — ${playerName} (Johnny)`)
@@ -196,9 +79,9 @@ function drCheckEmbed(current) {
     .setTitle(`🎴 Current DR — ${current.playerName} (Johnny)`)
     .setURL(`https://puddle.farm/player/${PLAYER_ID}/${CHAR_SHORT}`)
     .addFields(
-      { name: "DR",        value: `**${current.rating}**`,                        inline: true },
-      { name: "Deviation", value: `±${current.deviation}`,                        inline: true },
-      { name: "Char Rank", value: current.topChar ? `#${current.topChar}` : "—", inline: true },
+      { name: "DR",          value: `**${current.rating}**`,                        inline: true },
+      { name: "Deviation",   value: `±${current.deviation}`,                        inline: true },
+      { name: "Char Rank",   value: current.topChar ? `#${current.topChar}` : "—", inline: true },
     )
     .setFooter({ text: "puddle.farm • Guilty Gear Strive" })
     .setTimestamp();
@@ -221,11 +104,14 @@ function statsEmbed(current) {
 }
 
 function historyEmbed(playerName, history) {
-  const lines = history.slice(0, 10).map(match => {
+  const lines = history.map(match => {
     const result  = match.result_win ? "✅" : "❌";
-    const drAfter = fmt(match.own_rating_value);
-    return `${result} vs **${match.opponent_name}** (${match.opponent_character}) — DR: ${drAfter}`;
+    const drAfter = Math.round(match.own_rating_value) % 10000;
+    const opp     = match.opponent_name;
+    const oppChar = match.opponent_character;
+    return `${result} vs **${opp}** (${oppChar}) — DR: ${drAfter}`;
   });
+
   return new EmbedBuilder()
     .setColor(0xeb459e)
     .setTitle(`📜 Recent Matches — ${playerName} (Johnny)`)
@@ -240,17 +126,23 @@ function historyEmbed(playerName, history) {
 async function poll() {
   try {
     const current = await fetchDR();
+
     if (lastDR === null) {
       console.log(`[boot] ${current.playerName} DR: ${current.rating} | Games: ${current.matchCount}`);
-      lastDR = current.rating; lastDeviation = current.deviation; lastMatchCount = current.matchCount;
+      lastDR         = current.rating;
+      lastDeviation  = current.deviation;
+      lastMatchCount = current.matchCount;
       return;
     }
+
     if (current.rating !== lastDR) {
       const previous = { rating: lastDR, deviation: lastDeviation, matchCount: lastMatchCount };
       const channel  = await client.channels.fetch(CHANNEL_ID);
       await channel.send({ embeds: [drUpdateEmbed(current.playerName, current, previous)] });
       console.log(`[update] DR: ${lastDR} → ${current.rating}`);
-      lastDR = current.rating; lastDeviation = current.deviation; lastMatchCount = current.matchCount;
+      lastDR         = current.rating;
+      lastDeviation  = current.deviation;
+      lastMatchCount = current.matchCount;
     } else {
       console.log(`[poll] No change. DR: ${current.rating}`);
     }
@@ -271,57 +163,39 @@ client.on("messageCreate", async (message) => {
     try {
       const current = await fetchDR();
       await message.reply({ embeds: [drCheckEmbed(current)] });
-    } catch { await message.reply("❌ Could not fetch DR right now."); }
+    } catch (err) {
+      await message.reply("❌ Could not fetch DR right now, try again later.");
+    }
   }
 
   else if (command === "stats") {
     try {
       const current = await fetchDR();
       await message.reply({ embeds: [statsEmbed(current)] });
-    } catch { await message.reply("❌ Could not fetch stats right now."); }
-  }
-
-  else if (command === "history") {
-    try {
-      const [current, history] = await Promise.all([fetchDR(), fetchHistory(10)]);
-      await message.reply({ embeds: [historyEmbed(current.playerName, history)] });
-    } catch { await message.reply("❌ Could not fetch history right now."); }
+    } catch (err) {
+      await message.reply("❌ Could not fetch stats right now, try again later.");
+    }
   }
 
   else if (command === "is gavin 1700 yet") {
     try {
       const current = await fetchDR();
-      await message.reply(current.rating >= 1700 ? "Yes." : "No.");
-    } catch { await message.reply("❌ Could not fetch DR right now."); }
+      if (current.rating >= 1700) {
+        await message.reply("Yes.");
+      } else {
+        await message.reply("No.");
+      }
+    } catch (err) {
+      await message.reply("❌ Could not fetch DR right now, try again later.");
+    }
   }
 
-  else if (command === "chart") {
+  else if (command === "history") {
     try {
-      await message.reply("📊 Generating charts, one moment...");
-      const history = await fetchHistory(100);
-      if (history.length === 0) { await message.reply("❌ No match history found."); return; }
-
-      const [drBuf, wlBuf, muBuf] = await Promise.all([
-        generateDRChart(history),
-        generateWinLossChart(history),
-        generateMatchupChart(history),
-      ]);
-
-      await message.channel.send({
-        content: `📈 **DR Over Time** — last ${history.length} matches`,
-        files: [new AttachmentBuilder(drBuf, { name: "dr_chart.png" })]
-      });
-      await message.channel.send({
-        content: "🟩 **Win / Loss Breakdown**",
-        files: [new AttachmentBuilder(wlBuf, { name: "winloss_chart.png" })]
-      });
-      await message.channel.send({
-        content: "🎮 **Win Rate by Character** (top 10 most played)",
-        files: [new AttachmentBuilder(muBuf, { name: "matchup_chart.png" })]
-      });
+      const [current, history] = await Promise.all([fetchDR(), fetchHistory()]);
+      await message.reply({ embeds: [historyEmbed(current.playerName, history)] });
     } catch (err) {
-      console.error(err);
-      await message.reply("❌ Could not generate charts right now.");
+      await message.reply("❌ Could not fetch history right now, try again later.");
     }
   }
 });
@@ -330,7 +204,7 @@ client.on("messageCreate", async (message) => {
 
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
-  console.log(`Commands: !dr  !stats  !history  !chart  !is gavin 1700 yet`);
+  console.log(`Commands: !dr, !stats, !history`);
   poll();
   setInterval(poll, POLL_INTERVAL);
 });
