@@ -1,7 +1,7 @@
 [build]
 builder = "NIXPACKS"
 
-[build.nixpacks]
+[phases.setup]
 aptPkgs = [
   "build-essential",
   "libcairo2-dev",
@@ -9,5 +9,5 @@ aptPkgs = [
   "libjpeg-dev",
   "libgif-dev",
   "librsvg2-dev",
-  "pixman"
+  "pixman-1"
 ]
