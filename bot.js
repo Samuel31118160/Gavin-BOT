@@ -11,7 +11,7 @@ const AUTO_DELETE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PLAYER_ID  = "210720021753002458";
 const CHAR_SHORT = "JN";  // Johnny
 const API_URL    = `https://puddle.farm/api/player/${PLAYER_ID}`;
-const DEV_USER_ID = process.env.DEV_USER_ID; // your Discord user ID
+
 // ───────────────────────────────────────────────────────────────────────────
  
 const client = new Client({
@@ -400,12 +400,6 @@ client.on("messageCreate", async (message) => {
   }
  
   else if (command === "clearbotmsgs") {
-    if (message.author.id !== DEV_USER_ID) {
-      const denied = await message.reply("❌ You don't have permission to use this command.");
-      scheduleDelete(denied);
-      return;
-    }
-
     try {
       let deleted = 0;
       let lastId  = null;
@@ -484,7 +478,6 @@ client.on("messageCreate", async (message) => {
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
   console.log(`Commands: !dr, !stats, !history, !today, !graph`);
-  if (!DEV_USER_ID) console.warn("[warn] DEV_USER_ID not set — !clearbotmsgs will be locked for everyone");
   poll();
   setInterval(poll, POLL_INTERVAL);
 });
