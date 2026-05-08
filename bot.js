@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits, EmbedBuilder, AttachmentBuilder } = require("discord.js");
-const sharp = require("/home/claude/.npm-global/lib/node_modules/sharp");
+const sharp = require("sharp");
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const DISCORD_TOKEN  = process.env.DISCORD_TOKEN;
