@@ -62,117 +62,60 @@ async function fetchTodayMatches() {
 // ─── GRAPH GENERATION ──────────────────────────────────────────────────────
  
 function buildGraphSVG(playerName, matches) {
-  // matches are oldest→newest; each has own_rating_value and timestamp
-  // Build the DR series: starting point (before first match) + each match result
   const W = 800, H = 400;
-  const PAD = { top: 50, right: 40, bottom: 60, left: 70 };
+  const PAD = { top: 20, right: 20, bottom: 20, left: 20 };
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top - PAD.bottom;
- 
-  // Build points array: derive "DR before first match" from first match's before-value if available,
-  // otherwise just use all post-match DRs
+
   const drs = matches.map(m => Math.round(m.own_rating_value) % 10000);
- 
-  // Center the y-axis around the data
+
   const minDR = Math.min(...drs);
   const maxDR = Math.max(...drs);
   const rangePad = Math.max(20, Math.round((maxDR - minDR) * 0.3));
   const yMin = minDR - rangePad;
   const yMax = maxDR + rangePad;
- 
+
   const xScale = i => PAD.left + (i / (drs.length - 1 || 1)) * innerW;
   const yScale = v => PAD.top + (1 - (v - yMin) / (yMax - yMin)) * innerH;
- 
-  // Build polyline points
+
   const pts = drs.map((dr, i) => `${xScale(i).toFixed(1)},${yScale(dr).toFixed(1)}`).join(" ");
- 
-  // Build filled area path
+
   const firstX = xScale(0).toFixed(1);
   const lastX  = xScale(drs.length - 1).toFixed(1);
   const baseY  = (PAD.top + innerH).toFixed(1);
   const areaPath = `M ${firstX},${baseY} ` +
     drs.map((dr, i) => `L ${xScale(i).toFixed(1)},${yScale(dr).toFixed(1)}`).join(" ") +
     ` L ${lastX},${baseY} Z`;
- 
-  // Y axis ticks
+
+  const netChange = drs[drs.length - 1] - drs[0];
+  const lineColor = netChange >= 0 ? "#57f287" : "#ed4245";
+  const areaColor = netChange >= 0 ? "#57f28730" : "#ed424530";
+
+  // Grid lines (no labels)
   const tickCount = 5;
   const yTicks = Array.from({ length: tickCount + 1 }, (_, i) =>
     yMin + Math.round(((yMax - yMin) / tickCount) * i)
   );
- 
-  // X axis labels: show time for first, last, and a few in between
-  const labelIndices = new Set([0, drs.length - 1]);
-  if (drs.length > 4) {
-    const mid = Math.floor(drs.length / 2);
-    labelIndices.add(mid);
-  }
-  const timeLabel = ts => {
-    const d = new Date(ts);
-    return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
-  };
- 
-  // Net DR change
-  const netChange = drs[drs.length - 1] - drs[0];
-  const netStr    = netChange >= 0 ? `+${netChange}` : `${netChange}`;
-  const lineColor = netChange >= 0 ? "#57f287" : "#ed4245";
-  const areaColor = netChange >= 0 ? "#57f28730" : "#ed424530";
- 
-  // Dot markers (wins/losses)
+
+  const gridLines = yTicks.map(t => {
+    const y = yScale(t).toFixed(1);
+    return `<line x1="${PAD.left}" y1="${y}" x2="${W - PAD.right}" y2="${y}" stroke="#3a3b40" stroke-width="1"/>`;
+  }).join("\n  ");
+
   const dots = drs.map((dr, i) => {
     const win = matches[i].result_win;
     const cx  = xScale(i).toFixed(1);
     const cy  = yScale(dr).toFixed(1);
     const fill = win ? "#57f287" : "#ed4245";
     return `<circle cx="${cx}" cy="${cy}" r="5" fill="${fill}" stroke="#1e1f22" stroke-width="2"/>`;
-  }).join("\n    ");
- 
-  const yTickLines = yTicks.map(t => {
-    const y = yScale(t).toFixed(1);
-    return `
-    <line x1="${PAD.left}" y1="${y}" x2="${W - PAD.right}" y2="${y}" stroke="#3a3b40" stroke-width="1"/>
-    <text x="${PAD.left - 8}" y="${y}" fill="#9b9ea4" font-size="12" text-anchor="end" dominant-baseline="middle">${t}</text>`;
-  }).join("");
- 
-  const xTickLabels = [...labelIndices].map(i => {
-    const x   = xScale(i).toFixed(1);
-    const lbl = timeLabel(matches[i].timestamp);
-    return `<text x="${x}" y="${PAD.top + innerH + 22}" fill="#9b9ea4" font-size="11" text-anchor="middle">${lbl}</text>`;
-  }).join("\n    ");
- 
+  }).join("\n  ");
+
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-  <defs>
-    <style>text { font-family: 'Segoe UI', Arial, sans-serif; }</style>
-  </defs>
- 
-  <!-- Background -->
   <rect width="${W}" height="${H}" rx="12" fill="#2b2d31"/>
- 
-  <!-- Grid lines + Y labels -->
-  ${yTickLines}
- 
-  <!-- Area fill -->
+  ${gridLines}
   <path d="${areaPath}" fill="${areaColor}"/>
- 
-  <!-- Line -->
   <polyline points="${pts}" fill="none" stroke="${lineColor}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
- 
-  <!-- Dots -->
   ${dots}
- 
-  <!-- X labels -->
-  ${xTickLabels}
- 
-  <!-- Title -->
-  <text x="${W / 2}" y="28" fill="#ffffff" font-size="16" font-weight="bold" text-anchor="middle">${playerName} (Johnny) — Today's DR</text>
- 
-  <!-- Net change badge -->
-  <rect x="${W - PAD.right - 80}" y="8" width="75" height="26" rx="6" fill="${lineColor}22" stroke="${lineColor}" stroke-width="1.2"/>
-  <text x="${W - PAD.right - 42}" y="25" fill="${lineColor}" font-size="14" font-weight="bold" text-anchor="middle">${netStr} DR</text>
- 
-  <!-- Games label -->
-  <text x="${PAD.left}" y="25" fill="#9b9ea4" font-size="12">${matches.length} game${matches.length !== 1 ? "s" : ""} today</text>
- 
-  <!-- Axis line -->
   <line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top + innerH}" stroke="#4a4b50" stroke-width="1.5"/>
   <line x1="${PAD.left}" y1="${PAD.top + innerH}" x2="${W - PAD.right}" y2="${PAD.top + innerH}" stroke="#4a4b50" stroke-width="1.5"/>
 </svg>`;
