@@ -49,15 +49,14 @@ async function fetchHistory(count = 10) {
   return data.history || [];
 }
  
-// Fetch all of today's matches (fetches up to 200, filters by local date)
 async function fetchTodayMatches() {
   const history = await fetchHistory(200);
-  const todayStr = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD in local time
+  const todayStr = new Date().toLocaleDateString("en-CA");
   return history.filter(match => {
     if (!match.timestamp) return false;
     const matchDate = new Date(match.timestamp).toLocaleDateString("en-CA");
     return matchDate === todayStr;
-  });
+  }).reverse(); // oldest → newest
 }
  
 // ─── GRAPH GENERATION ──────────────────────────────────────────────────────
