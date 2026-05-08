@@ -6,10 +6,12 @@ const DISCORD_TOKEN  = process.env.DISCORD_TOKEN;
 const CHANNEL_ID     = process.env.CHANNEL_ID;
 const POLL_INTERVAL  = 60_000;
 const PREFIX         = "!";
+const AUTO_DELETE_MS = 24 * 60 * 60 * 1000; // 24 hours
  
 const PLAYER_ID  = "210720021753002458";
 const CHAR_SHORT = "JN";  // Johnny
 const API_URL    = `https://puddle.farm/api/player/${PLAYER_ID}`;
+const DEV_USER_ID = process.env.DEV_USER_ID; // your Discord user ID
 // ───────────────────────────────────────────────────────────────────────────
  
 const client = new Client({
@@ -23,6 +25,26 @@ const client = new Client({
 let lastDR         = null;
 let lastDeviation  = null;
 let lastMatchCount = null;
+
+// ─── AUTO-DELETE HELPER ────────────────────────────────────────────────────
+
+function scheduleDelete(message) {
+  setTimeout(() => {
+    message.delete().catch(err => {
+      // Ignore "Unknown Message" (already deleted) and missing permissions
+      if (err.code !== 10008 && err.code !== 50013) {
+        console.error("[auto-delete error]", err.message);
+      }
+    });
+  }, AUTO_DELETE_MS);
+}
+
+// Wraps message.reply() and schedules deletion on the sent message
+async function replyAndSchedule(message, payload) {
+  const sent = await message.reply(payload);
+  scheduleDelete(sent);
+  return sent;
+}
  
 async function fetchDR() {
   const res = await fetch(API_URL);
@@ -63,59 +85,105 @@ async function fetchTodayMatches() {
  
 function buildGraphSVG(playerName, matches) {
   const W = 800, H = 400;
-  const PAD = { top: 20, right: 20, bottom: 20, left: 20 };
+  const PAD = { top: 50, right: 40, bottom: 60, left: 70 };
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top - PAD.bottom;
-
+ 
   const drs = matches.map(m => Math.round(m.own_rating_value) % 10000);
-
+ 
   const minDR = Math.min(...drs);
   const maxDR = Math.max(...drs);
   const rangePad = Math.max(20, Math.round((maxDR - minDR) * 0.3));
   const yMin = minDR - rangePad;
   const yMax = maxDR + rangePad;
-
+ 
   const xScale = i => PAD.left + (i / (drs.length - 1 || 1)) * innerW;
   const yScale = v => PAD.top + (1 - (v - yMin) / (yMax - yMin)) * innerH;
-
+ 
   const pts = drs.map((dr, i) => `${xScale(i).toFixed(1)},${yScale(dr).toFixed(1)}`).join(" ");
-
+ 
   const firstX = xScale(0).toFixed(1);
   const lastX  = xScale(drs.length - 1).toFixed(1);
   const baseY  = (PAD.top + innerH).toFixed(1);
   const areaPath = `M ${firstX},${baseY} ` +
     drs.map((dr, i) => `L ${xScale(i).toFixed(1)},${yScale(dr).toFixed(1)}`).join(" ") +
     ` L ${lastX},${baseY} Z`;
-
-  const netChange = drs[drs.length - 1] - drs[0];
-  const lineColor = netChange >= 0 ? "#57f287" : "#ed4245";
-  const areaColor = netChange >= 0 ? "#57f28730" : "#ed424530";
-
-  // Grid lines (no labels)
+ 
   const tickCount = 5;
   const yTicks = Array.from({ length: tickCount + 1 }, (_, i) =>
     yMin + Math.round(((yMax - yMin) / tickCount) * i)
   );
-
-  const gridLines = yTicks.map(t => {
-    const y = yScale(t).toFixed(1);
-    return `<line x1="${PAD.left}" y1="${y}" x2="${W - PAD.right}" y2="${y}" stroke="#3a3b40" stroke-width="1"/>`;
-  }).join("\n  ");
-
+ 
+  const labelIndices = new Set([0, drs.length - 1]);
+  if (drs.length > 4) {
+    const mid = Math.floor(drs.length / 2);
+    labelIndices.add(mid);
+  }
+  const timeLabel = ts => {
+    const d = new Date(ts);
+    return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  };
+ 
+  const netChange = drs[drs.length - 1] - drs[0];
+  const netStr    = netChange >= 0 ? `+${netChange}` : `${netChange}`;
+  const lineColor = netChange >= 0 ? "#57f287" : "#ed4245";
+  const areaColor = netChange >= 0 ? "#57f28730" : "#ed424530";
+ 
   const dots = drs.map((dr, i) => {
     const win = matches[i].result_win;
     const cx  = xScale(i).toFixed(1);
     const cy  = yScale(dr).toFixed(1);
     const fill = win ? "#57f287" : "#ed4245";
     return `<circle cx="${cx}" cy="${cy}" r="5" fill="${fill}" stroke="#1e1f22" stroke-width="2"/>`;
-  }).join("\n  ");
-
+  }).join("\n    ");
+ 
+  const yTickLines = yTicks.map(t => {
+    const y = yScale(t).toFixed(1);
+    return `
+    <line x1="${PAD.left}" y1="${y}" x2="${W - PAD.right}" y2="${y}" stroke="#3a3b40" stroke-width="1"/>
+    <text x="${PAD.left - 8}" y="${y}" fill="#9b9ea4" font-size="12" text-anchor="end" dominant-baseline="middle">${t}</text>`;
+  }).join("");
+ 
+  const xTickLabels = [...labelIndices].map(i => {
+    const x   = xScale(i).toFixed(1);
+    const lbl = timeLabel(matches[i].timestamp);
+    return `<text x="${x}" y="${PAD.top + innerH + 22}" fill="#9b9ea4" font-size="11" text-anchor="middle">${lbl}</text>`;
+  }).join("\n    ");
+ 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <defs>
+    <style>text { font-family: 'Segoe UI', Arial, sans-serif; }</style>
+  </defs>
+ 
+  <!-- Background -->
   <rect width="${W}" height="${H}" rx="12" fill="#2b2d31"/>
-  ${gridLines}
+ 
+  <!-- Grid lines + Y labels -->
+  ${yTickLines}
+ 
+  <!-- Area fill -->
   <path d="${areaPath}" fill="${areaColor}"/>
+ 
+  <!-- Line -->
   <polyline points="${pts}" fill="none" stroke="${lineColor}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+ 
+  <!-- Dots -->
   ${dots}
+ 
+  <!-- X labels -->
+  ${xTickLabels}
+ 
+  <!-- Title -->
+  <text x="${W / 2}" y="28" fill="#ffffff" font-size="16" font-weight="bold" text-anchor="middle">${playerName} (Johnny) — Today's DR</text>
+ 
+  <!-- Net change badge -->
+  <rect x="${W - PAD.right - 80}" y="8" width="75" height="26" rx="6" fill="${lineColor}22" stroke="${lineColor}" stroke-width="1.2"/>
+  <text x="${W - PAD.right - 42}" y="25" fill="${lineColor}" font-size="14" font-weight="bold" text-anchor="middle">${netStr} DR</text>
+ 
+  <!-- Games label -->
+  <text x="${PAD.left}" y="25" fill="#9b9ea4" font-size="12">${matches.length} game${matches.length !== 1 ? "s" : ""} today</text>
+ 
+  <!-- Axis line -->
   <line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top + innerH}" stroke="#4a4b50" stroke-width="1.5"/>
   <line x1="${PAD.left}" y1="${PAD.top + innerH}" x2="${W - PAD.right}" y2="${PAD.top + innerH}" stroke="#4a4b50" stroke-width="1.5"/>
 </svg>`;
@@ -259,7 +327,8 @@ async function poll() {
     if (current.rating !== lastDR) {
       const previous = { rating: lastDR, deviation: lastDeviation, matchCount: lastMatchCount };
       const channel  = await client.channels.fetch(CHANNEL_ID);
-      await channel.send({ embeds: [drUpdateEmbed(current.playerName, current, previous)] });
+      const sent     = await channel.send({ embeds: [drUpdateEmbed(current.playerName, current, previous)] });
+      scheduleDelete(sent); // auto-delete poll notifications too
       console.log(`[update] DR: ${lastDR} → ${current.rating}`);
       lastDR         = current.rating;
       lastDeviation  = current.deviation;
@@ -283,18 +352,18 @@ client.on("messageCreate", async (message) => {
   if (command === "dr") {
     try {
       const current = await fetchDR();
-      await message.reply({ embeds: [drCheckEmbed(current)] });
+      await replyAndSchedule(message, { embeds: [drCheckEmbed(current)] });
     } catch (err) {
-      await message.reply("❌ Could not fetch DR right now, try again later.");
+      await replyAndSchedule(message, "❌ Could not fetch DR right now, try again later.");
     }
   }
  
   else if (command === "stats") {
     try {
       const current = await fetchDR();
-      await message.reply({ embeds: [statsEmbed(current)] });
+      await replyAndSchedule(message, { embeds: [statsEmbed(current)] });
     } catch (err) {
-      await message.reply("❌ Could not fetch stats right now, try again later.");
+      await replyAndSchedule(message, "❌ Could not fetch stats right now, try again later.");
     }
   }
  
@@ -302,40 +371,83 @@ client.on("messageCreate", async (message) => {
     try {
       const current = await fetchDR();
       if (current.rating >= 1700) {
-        await message.reply("Yes.");
+        await replyAndSchedule(message, "Yes.");
       } else {
-        await message.reply("No.");
+        await replyAndSchedule(message, "No.");
       }
     } catch (err) {
-      await message.reply("❌ Could not fetch DR right now, try again later.");
+      await replyAndSchedule(message, "❌ Could not fetch DR right now, try again later.");
     }
   }
  
   else if (command === "history") {
     try {
       const [current, history] = await Promise.all([fetchDR(), fetchHistory()]);
-      await message.reply({ embeds: [historyEmbed(current.playerName, history)] });
+      await replyAndSchedule(message, { embeds: [historyEmbed(current.playerName, history)] });
     } catch (err) {
-      await message.reply("❌ Could not fetch history right now, try again later.");
+      await replyAndSchedule(message, "❌ Could not fetch history right now, try again later.");
     }
   }
  
   else if (command === "today") {
     try {
       const [current, matches] = await Promise.all([fetchDR(), fetchTodayMatches()]);
-      await message.reply({ embeds: [todayEmbed(current.playerName, matches, current.rating)] });
+      await replyAndSchedule(message, { embeds: [todayEmbed(current.playerName, matches, current.rating)] });
     } catch (err) {
       console.error("[today error]", err);
-      await message.reply("❌ Could not fetch today's data right now, try again later.");
+      await replyAndSchedule(message, "❌ Could not fetch today's data right now, try again later.");
     }
   }
  
+  else if (command === "clearbotmsgs") {
+    if (message.author.id !== DEV_USER_ID) {
+      const denied = await message.reply("❌ You don't have permission to use this command.");
+      scheduleDelete(denied);
+      return;
+    }
+
+    try {
+      let deleted = 0;
+      let lastId  = null;
+
+      // Fetch in batches of 100 until we run out of messages
+      while (true) {
+        const options = { limit: 100 };
+        if (lastId) options.before = lastId;
+
+        const fetched = await message.channel.messages.fetch(options);
+        if (fetched.size === 0) break;
+
+        const botMessages = fetched.filter(m => m.author.id === client.user.id);
+
+        for (const msg of botMessages.values()) {
+          await msg.delete().catch(err => {
+            if (err.code !== 10008 && err.code !== 50013) throw err;
+          });
+          deleted++;
+        }
+
+        lastId = fetched.last().id;
+
+        // If we got fewer than 100, we've reached the end
+        if (fetched.size < 100) break;
+      }
+
+      const confirm = await message.reply(`🧹 Deleted **${deleted}** bot message${deleted !== 1 ? "s" : ""}.`);
+      scheduleDelete(confirm);
+    } catch (err) {
+      console.error("[clearbotmsgs error]", err);
+      await message.reply("❌ Something went wrong while clearing messages.");
+    }
+  }
+
   else if (command === "graph") {
     try {
       const [current, matches] = await Promise.all([fetchDR(), fetchTodayMatches()]);
  
       if (matches.length < 2) {
-        await message.reply(
+        await replyAndSchedule(
+          message,
           matches.length === 0
             ? "📅 No games played today yet — nothing to graph!"
             : "📅 Only 1 game today — need at least 2 to draw a graph."
@@ -359,10 +471,10 @@ client.on("messageCreate", async (message) => {
         .setFooter({ text: "puddle.farm • Guilty Gear Strive" })
         .setTimestamp();
  
-      await message.reply({ embeds: [embed], files: [attach] });
+      await replyAndSchedule(message, { embeds: [embed], files: [attach] });
     } catch (err) {
       console.error("[graph error]", err);
-      await message.reply("❌ Could not generate graph right now, try again later.");
+      await replyAndSchedule(message, "❌ Could not generate graph right now, try again later.");
     }
   }
 });
@@ -372,6 +484,7 @@ client.on("messageCreate", async (message) => {
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
   console.log(`Commands: !dr, !stats, !history, !today, !graph`);
+  if (!DEV_USER_ID) console.warn("[warn] DEV_USER_ID not set — !clearbotmsgs will be locked for everyone");
   poll();
   setInterval(poll, POLL_INTERVAL);
 });
