@@ -1,0 +1,13 @@
+{
+  "name": "puddle-farm-dr-tracker",
+  "version": "1.0.0",
+  "description": "Discord bot that tracks puddle.farm DR changes in real time",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "sharp": "^0.34.5"
+  }
+}
